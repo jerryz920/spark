@@ -154,9 +154,23 @@ private[deploy] class Worker(
 
   var coresUsed = 0
   var memoryUsed = 0
+  var portUsed = Array.fill[Byte](65536/8)(0)
 
   def coresFree: Int = cores - coresUsed
   def memoryFree: Int = memory - memoryUsed
+
+  private def findUnused(): Int = {
+    for (idx <- 0 to 8000) {
+      if (portUsed(idx) == 0) {
+        return idx
+      }
+    }
+    -1
+  }
+
+  private def setUsed(i: Int) {
+  }
+
 
   private def createWorkDir() {
     workDir = Option(workDirPath).map(new File(_)).getOrElse(new File(sparkHome, "work"))
@@ -359,6 +373,8 @@ private[deploy] class Worker(
   private def handleRegisterResponse(msg: RegisterWorkerResponse): Unit = synchronized {
     msg match {
       case RegisteredWorker(masterRef, masterWebUiUrl) =>
+        // We don't need to send membership call here. Let worker do it every
+        // time it starts in shell script.
         logInfo("Successfully registered with master " + masterRef.address.toSparkURL)
         registered = true
         changeMaster(masterRef, masterWebUiUrl)
@@ -478,6 +494,9 @@ private[deploy] class Worker(
             appLocalDirs, ExecutorState.RUNNING)
           executors(appId + "/" + execId) = manager
           manager.start()
+          // Yan: Publish the attestation, attest
+          manager.attest("org.apache.spark.executor.CoarseGrainedExecutorBackend",
+            35000, 40000)
           coresUsed += cores_
           memoryUsed += memory_
           sendToMaster(ExecutorStateChanged(appId, execId, manager.state, None, None))

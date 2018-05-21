@@ -19,7 +19,7 @@ package org.apache.spark.deploy
 
 import java.io.{File, PrintStream}
 import java.lang.reflect.{InvocationTargetException, Modifier, UndeclaredThrowableException}
-import java.net.URL
+import java.net._
 import java.security.PrivilegedExceptionAction
 
 import scala.annotation.tailrec
@@ -40,6 +40,7 @@ import org.apache.ivy.core.settings.IvySettings
 import org.apache.ivy.plugins.matcher.GlobPatternMatcher
 import org.apache.ivy.plugins.repository.file.FileRepository
 import org.apache.ivy.plugins.resolver.{ChainResolver, FileSystemResolver, IBiblioResolver}
+import scalaj.http._
 
 import org.apache.spark.{SPARK_REVISION, SPARK_VERSION, SparkException, SparkUserAppException}
 import org.apache.spark.{SPARK_BRANCH, SPARK_BUILD_DATE, SPARK_BUILD_USER, SPARK_REPO_URL}
@@ -85,6 +86,11 @@ object SparkSubmit {
   private val R_PACKAGE_ARCHIVE = "rpkg.zip"
 
   private val CLASS_NOT_FOUND_EXIT_STATUS = 101
+
+  // Yan: Adding some static information for Spark Master to do attestation
+  private val mds: String = "http://metadata:19851"
+  private val localhost: InetAddress = InetAddress.getLocalHost()
+  private val myip: String = localhost.getHostAddress
 
   // scalastyle:off println
   // Exposed for testing
@@ -146,6 +152,55 @@ object SparkSubmit {
       .requestSubmissionStatus(args.submissionToRequestStatusFor)
   }
 
+  private def checkMaster(masterUrl: String): Boolean = {
+    var masterAddr = masterUrl.substring("spark://".length)
+    val response: HttpResponse[String] = Http(mds + "/checkMaster").postData(
+      s"""{"principal": "${myip}:25000", "otherValues":["${masterAddr}"]}"""
+    ).header("Content-Type", "application/json").header("Charset", "UTF-8").asString
+    printStream.println(s"attest result: $response")
+    true
+  }
+
+  // postEndorsement "192.168.$n.0:4040" "image-jar" "source"
+  // "https://github.com/intel-hadoop/hibench.git#dev"
+  // postEndorsementLink "192.168.$n.0:4040" "192.168.$n.0:4040" "image-jar"
+  // Ask anyone to track its own endorsements about image
+  // postInstance "192.168.$n.0:4040" "driver" "image-jar"
+  // "192.168.$n.0:40000-42000" "192.168.$n.0:4040"
+
+  // A better design is to wrap spark-submit so it attests outside. This also means
+  // the spark job itself is not able to modify the attestation.
+  private def attestDriver(args: Seq[String], props: Map[String, String], main: String) {
+    // FIXME: This is a hard coded version just for intel hibench evaluation. Should
+    // pass in parameters in future to tweak this field.
+    if (checkMaster(props("spark.master"))) {
+      val response1: HttpResponse[String] = Http(mds + "/postEndorsement").postData(
+        s"""{"principal": "${myip}:25000", "otherValues":["${props("spark.jars")}",
+          "source", "https://github.com/intel-hadoop/hibench.git#dev"]}"""
+      ).header("Content-Type", "application/json").header("Charset", "UTF-8").asString
+      printStream.println(s"endorse result: $response1")
+
+      val response2: HttpResponse[String] = Http(mds + "/postEndorsementLink").postData(
+        s"""{"principal": "${myip}:25000", "otherValues":["${myip}:25000",
+          "${props("spark.jars")}"]}"""
+      ).header("Content-Type", "application/json").header("Charset", "UTF-8").asString
+      printStream.println(s"endorse result: $response2")
+
+      val response3: HttpResponse[String] = Http(mds + "/postInstance").postData(
+        s"""{"principal": "${myip}:25000", "otherValues":["${props("spark.app.name")}",
+          "${props("spark.jars")}", "${myip}:35000-63000", "${myip}:25000"]}"""
+      ).header("Content-Type", "application/json").header("Charset", "UTF-8").asString
+      printStream.println(s"attest result: $response3")
+    }
+  }
+
+  private def removeAttestation() {
+      val response: HttpResponse[String] = Http(mds + "/lazyDeleteInstance").postData(
+        s"""{"principal": "${myip}:25000", "otherValues":["${myip}:35000-63000"]}"""
+      ).header("Content-Type", "application/json").header("Charset", "UTF-8").asString
+      printStream.println(s"attest result: $response")
+  }
+
   /**
    * Submit the application using the provided parameters.
    *
@@ -159,6 +214,9 @@ object SparkSubmit {
   private def submit(args: SparkSubmitArguments): Unit = {
     val (childArgs, childClasspath, sysProps, childMainClass) = prepareSubmitEnvironment(args)
 
+    printWarning(s"""INFO: childArgs is ${childArgs.mkString},
+      main class is ${childMainClass}, sysProps are ${sysProps.mkString}""")
+    attestDriver(childArgs, sysProps, childMainClass)
     def doRunMain(): Unit = {
       if (args.proxyUser != null) {
         val proxyUser = UserGroupInformation.createProxyUser(args.proxyUser,
@@ -751,6 +809,8 @@ object SparkSubmit {
           case t: Throwable =>
             throw t
         }
+    } finally {
+      removeAttestation()
     }
   }
 

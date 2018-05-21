@@ -17,12 +17,15 @@
 
 package org.apache.spark.deploy.master
 
+import java.net._
 import java.text.SimpleDateFormat
 import java.util.{Date, Locale}
 import java.util.concurrent.{ScheduledFuture, TimeUnit}
 
 import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet}
 import scala.util.Random
+
+import scalaj.http._
 
 import org.apache.spark.{SecurityManager, SparkConf, SparkException}
 import org.apache.spark.deploy.{ApplicationDescription, DriverDescription,
@@ -65,6 +68,11 @@ private[deploy] class Master(
   val idToApp = new HashMap[String, ApplicationInfo]
   private val waitingApps = new ArrayBuffer[ApplicationInfo]
   val apps = new HashSet[ApplicationInfo]
+
+  // Yan: Adding some static information for Spark Master to do attestation
+  private val mds: String = "http://metadata:19851"
+  private val localhost: InetAddress = InetAddress.getLocalHost()
+  private val myip: String = localhost.getHostAddress
 
   private val idToWorker = new HashMap[String, WorkerInfo]
   private val addressToWorker = new HashMap[RpcAddress, WorkerInfo]
@@ -385,6 +393,23 @@ private[deploy] class Master(
 
   }
 
+  private def verify(worker: WorkerInfo): Boolean = {
+    val response: HttpResponse[String] = Http(mds + "/checkWorkerFromMaster").postData(
+      s"""{"principal": "${myip}:1000", "otherValues":["${worker.host}:${worker.port}"]}"""
+    ).header("Content-Type", "application/json").header("Charset", "UTF-8").asString
+    logInfo(s"attest result: $response")
+    true
+  }
+
+  private def admitWorkerInGroup(worker: WorkerInfo) {
+    // Any port like ${myip}:1,2,3,4... should work for master.
+    val response: HttpResponse[String] = Http(mds + "/postMembership").postData(
+      s"""{"principal": "${myip}:1000", "otherValues":["SparkGroup",
+      "${worker.host}:${worker.port}"]}"""
+    ).header("Content-Type", "application/json").header("Charset", "UTF-8").asString
+    logInfo(s"attest result: $response")
+  }
+
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case RegisterWorker(
         id, workerHost, workerPort, workerRef, cores, memory, workerWebUiUrl) =>
@@ -397,10 +422,17 @@ private[deploy] class Master(
       } else {
         val worker = new WorkerInfo(id, workerHost, workerPort, cores, memory,
           workerRef, workerWebUiUrl)
+
+        // Yan: Check and admit the worker into the group
+        if (verify(worker)) {
+          admitWorkerInGroup(worker)
+        }
+
         if (registerWorker(worker)) {
           persistenceEngine.addWorker(worker)
           context.reply(RegisteredWorker(self, masterWebUiUrl))
           schedule()
+
         } else {
           val workerAddress = worker.endpoint.address
           logWarning("Worker registration failed. Attempted to re-register worker at same " +

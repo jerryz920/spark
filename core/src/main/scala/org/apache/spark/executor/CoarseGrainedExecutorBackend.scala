@@ -55,7 +55,8 @@ private[spark] class CoarseGrainedExecutorBackend(
   private[this] val ser: SerializerInstance = env.closureSerializer.newInstance()
 
   override def onStart() {
-    logInfo("Connecting to driver: " + driverUrl)
+    logInfo("Connecting to driver: " + driverUrl + " ExecutorID: " + executorId
+      + " Host name: " + hostname)
     rpcEnv.asyncSetupEndpointRefByURI(driverUrl).flatMap { ref =>
       // This is a very fast action so we can use "ThreadUtils.sameThread"
       driver = Some(ref)
@@ -73,6 +74,11 @@ private[spark] class CoarseGrainedExecutorBackend(
     val prefix = "SPARK_LOG_URL_"
     sys.env.filterKeys(_.startsWith(prefix))
       .map(e => (e._1.substring(prefix.length).toLowerCase, e._2))
+  }
+
+  private def joinGroup() {
+    // use driver url to join the driver posted group.
+
   }
 
   override def receive: PartialFunction[Any, Unit] = {

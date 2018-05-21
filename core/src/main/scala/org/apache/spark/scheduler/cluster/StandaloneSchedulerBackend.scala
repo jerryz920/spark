@@ -56,6 +56,7 @@ private[spark] class StandaloneSchedulerBackend(
   private val maxCores = conf.getOption("spark.cores.max").map(_.toInt)
   private val totalExpectedCores = maxCores.getOrElse(0)
 
+
   override def start() {
     super.start()
 
@@ -102,6 +103,7 @@ private[spark] class StandaloneSchedulerBackend(
       args, sc.executorEnvs, classPathEntries ++ testingClassPath, libraryPathEntries, javaOpts)
     val appUIAddress = sc.ui.map(_.appUIAddress).getOrElse("")
     val coresPerExecutor = conf.getOption("spark.executor.cores").map(_.toInt)
+    logInfo(s"coresPerExecutor is $coresPerExecutor, maxCore is $maxCores")
     // If we're using dynamic allocation, set our initial executor limit to 0 for now.
     // ExecutorAllocationManager will send the real initial limit to the Master later.
     val initialExecutorLimit =

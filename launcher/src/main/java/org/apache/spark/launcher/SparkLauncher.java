@@ -459,6 +459,7 @@ public class SparkLauncher {
    * @return A process handle for the Spark app.
    */
   public Process launch() throws IOException {
+    // Yan: This is a place good for attesting the Spark App
     Process childProc = createBuilder().start();
     if (redirectToLog) {
       String loggerName = builder.getEffectiveConfig().get(CHILD_PROCESS_LOGGER_NAME);

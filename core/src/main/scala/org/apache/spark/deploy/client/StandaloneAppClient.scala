@@ -17,6 +17,7 @@
 
 package org.apache.spark.deploy.client
 
+import java.net._
 import java.util.concurrent._
 import java.util.concurrent.{Future => JFuture, ScheduledFuture => JScheduledFuture}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
@@ -24,6 +25,8 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 import scala.concurrent.Future
 import scala.util.{Failure, Success}
 import scala.util.control.NonFatal
+
+import scalaj.http._
 
 import org.apache.spark.SparkConf
 import org.apache.spark.deploy.{ApplicationDescription, ExecutorState}
@@ -152,6 +155,36 @@ private[spark] class StandaloneAppClient(
       masterRpcAddresses.contains(remoteAddress)
     }
 
+    // Yan: grant and revoke membership here
+    def checkExecutorHost(fullId: String): Boolean = {
+      val response: HttpResponse[String] = Http(mds + "/checkExecutorFromDriver").postData(
+        s"""{"principal": "${myip}:35000", "otherValues":["${fullId}"]}"""
+      ).header("Content-Type", "application/json").header("Charset", "UTF-8").asString
+      logInfo(s"attest result: $response")
+      true
+    }
+
+    // Yan: use for attestation
+    private val mds: String = "http://metadata:19851"
+    private val localhost: InetAddress = InetAddress.getLocalHost()
+    private val myip: String = localhost.getHostAddress
+
+    def grantMembership(fullId: String) {
+      if (checkExecutorHost(fullId)) {
+        val response: HttpResponse[String] = Http(mds + "/postMembership").postData(
+          s"""{"principal": "${myip}:35000", "otherValues":["DriverGroup", "${fullId}"]}"""
+        ).header("Content-Type", "application/json").header("Charset", "UTF-8").asString
+        logInfo(s"membership result: $response")
+      }
+    }
+
+    def revokeMembership(fullId: String) {
+      val response: HttpResponse[String] = Http(mds + "/delMembership").postData(
+        s"""{"principal": "${myip}:35000", "otherValues":["DriverGroup", "${fullId}"]}"""
+      ).header("Content-Type", "application/json").header("Charset", "UTF-8").asString
+      logInfo(s"membership result: $response")
+    }
+
     override def receive: PartialFunction[Any, Unit] = {
       case RegisteredApplication(appId_, masterRef) =>
         // FIXME How to handle the following cases?
@@ -178,8 +211,15 @@ private[spark] class StandaloneAppClient(
         val fullId = appId + "/" + id
         val messageText = message.map(s => " (" + s + ")").getOrElse("")
         logInfo("Executor updated: %s is now %s%s".format(fullId, state, messageText))
+        if (state == ExecutorState.RUNNING) {
+          // Grant the membership for the executor using its ID, which will be unique
+          grantMembership(fullId)
+        }
         if (ExecutorState.isFinished(state)) {
           listener.executorRemoved(fullId, message.getOrElse(""), exitStatus, workerLost)
+
+          // Delete a membership from the cluster
+          revokeMembership(fullId)
         }
 
       case MasterChanged(masterRef, masterWebUiUrl) =>
@@ -204,26 +244,26 @@ private[spark] class StandaloneAppClient(
             context.reply(false)
         }
 
-      case k: KillExecutors =>
-        master match {
-          case Some(m) => askAndReplyAsync(m, context, k)
-          case None =>
-            logWarning("Attempted to kill executors before registering with Master.")
-            context.reply(false)
-        }
+          case k: KillExecutors =>
+            master match {
+              case Some(m) => askAndReplyAsync(m, context, k)
+              case None =>
+                logWarning("Attempted to kill executors before registering with Master.")
+                context.reply(false)
+            }
     }
 
     private def askAndReplyAsync[T](
-        endpointRef: RpcEndpointRef,
-        context: RpcCallContext,
-        msg: T): Unit = {
-      // Ask a message and create a thread to reply with the result.  Allow thread to be
-      // interrupted during shutdown, otherwise context must be notified of NonFatal errors.
-      endpointRef.ask[Boolean](msg).andThen {
-        case Success(b) => context.reply(b)
-        case Failure(ie: InterruptedException) => // Cancelled
-        case Failure(NonFatal(t)) => context.sendFailure(t)
-      }(ThreadUtils.sameThread)
+      endpointRef: RpcEndpointRef,
+      context: RpcCallContext,
+      msg: T): Unit = {
+        // Ask a message and create a thread to reply with the result.  Allow thread to be
+        // interrupted during shutdown, otherwise context must be notified of NonFatal errors.
+        endpointRef.ask[Boolean](msg).andThen {
+          case Success(b) => context.reply(b)
+          case Failure(ie: InterruptedException) => // Cancelled
+          case Failure(NonFatal(t)) => context.sendFailure(t)
+        }(ThreadUtils.sameThread)
     }
 
     override def onDisconnected(address: RpcAddress): Unit = {
@@ -265,52 +305,52 @@ private[spark] class StandaloneAppClient(
       registerMasterThreadPool.shutdownNow()
     }
 
-  }
+    }
 
-  def start() {
-    // Just launch an rpcEndpoint; it will call back into the listener.
-    endpoint.set(rpcEnv.setupEndpoint("AppClient", new ClientEndpoint(rpcEnv)))
-  }
+    def start() {
+      // Just launch an rpcEndpoint; it will call back into the listener.
+      endpoint.set(rpcEnv.setupEndpoint("AppClient", new ClientEndpoint(rpcEnv)))
+    }
 
-  def stop() {
-    if (endpoint.get != null) {
-      try {
-        val timeout = RpcUtils.askRpcTimeout(conf)
-        timeout.awaitResult(endpoint.get.ask[Boolean](StopAppClient))
-      } catch {
-        case e: TimeoutException =>
-          logInfo("Stop request to Master timed out; it may already be shut down.")
+    def stop() {
+      if (endpoint.get != null) {
+        try {
+          val timeout = RpcUtils.askRpcTimeout(conf)
+          timeout.awaitResult(endpoint.get.ask[Boolean](StopAppClient))
+        } catch {
+          case e: TimeoutException =>
+            logInfo("Stop request to Master timed out; it may already be shut down.")
+        }
+        endpoint.set(null)
       }
-      endpoint.set(null)
     }
-  }
 
-  /**
-   * Request executors from the Master by specifying the total number desired,
-   * including existing pending and running executors.
-   *
-   * @return whether the request is acknowledged.
-   */
-  def requestTotalExecutors(requestedTotal: Int): Future[Boolean] = {
-    if (endpoint.get != null && appId.get != null) {
-      endpoint.get.ask[Boolean](RequestExecutors(appId.get, requestedTotal))
-    } else {
-      logWarning("Attempted to request executors before driver fully initialized.")
-      Future.successful(false)
+    /**
+     * Request executors from the Master by specifying the total number desired,
+     * including existing pending and running executors.
+     *
+     * @return whether the request is acknowledged.
+     */
+    def requestTotalExecutors(requestedTotal: Int): Future[Boolean] = {
+      if (endpoint.get != null && appId.get != null) {
+        endpoint.get.ask[Boolean](RequestExecutors(appId.get, requestedTotal))
+      } else {
+        logWarning("Attempted to request executors before driver fully initialized.")
+        Future.successful(false)
+      }
     }
-  }
 
-  /**
-   * Kill the given list of executors through the Master.
-   * @return whether the kill request is acknowledged.
-   */
-  def killExecutors(executorIds: Seq[String]): Future[Boolean] = {
-    if (endpoint.get != null && appId.get != null) {
-      endpoint.get.ask[Boolean](KillExecutors(appId.get, executorIds))
-    } else {
-      logWarning("Attempted to kill executors before driver fully initialized.")
-      Future.successful(false)
+    /**
+     * Kill the given list of executors through the Master.
+     * @return whether the kill request is acknowledged.
+     */
+    def killExecutors(executorIds: Seq[String]): Future[Boolean] = {
+      if (endpoint.get != null && appId.get != null) {
+        endpoint.get.ask[Boolean](KillExecutors(appId.get, executorIds))
+      } else {
+        logWarning("Attempted to kill executors before driver fully initialized.")
+        Future.successful(false)
+      }
     }
-  }
 
-}
+  }

@@ -18,11 +18,13 @@
 package org.apache.spark.deploy.worker
 
 import java.io._
+import java.net._
 import java.nio.charset.StandardCharsets
 
 import scala.collection.JavaConverters._
 
 import com.google.common.io.Files
+import scalaj.http._
 
 import org.apache.spark.{SecurityManager, SparkConf}
 import org.apache.spark.deploy.{ApplicationDescription, ExecutorState}
@@ -31,6 +33,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.rpc.RpcEndpointRef
 import org.apache.spark.util.{ShutdownHookManager, Utils}
 import org.apache.spark.util.logging.FileAppender
+
 
 /**
  * Manages the execution of one executor process.
@@ -60,6 +63,9 @@ private[deploy] class ExecutorRunner(
   private var process: Process = null
   private var stdoutAppender: FileAppender = null
   private var stderrAppender: FileAppender = null
+  private val mds: String = "http://metadata:19851"
+  private val localhost: InetAddress = InetAddress.getLocalHost()
+  private val myip: String = localhost.getHostAddress
 
   // Timeout to wait for when trying to terminate an executor.
   private val EXECUTOR_TERMINATE_TIMEOUT_MS = 10 * 1000
@@ -69,6 +75,9 @@ private[deploy] class ExecutorRunner(
   private var shutdownHook: AnyRef = null
 
   private[worker] def start() {
+    logInfo(s"""
+      Starting runner: mds=$mds, myip=$myip, workerId=$workerId, publicAddr=$publicAddress.
+      """)
     workerThread = new Thread("ExecutorRunner for " + fullId) {
       override def run() { fetchAndRunExecutor() }
     }
@@ -81,6 +90,22 @@ private[deploy] class ExecutorRunner(
         state = ExecutorState.FAILED
       }
       killProcess(Some("Worker shutting down")) }
+  }
+
+  def attest(image: String, lport: Int, rport: Int) {
+    val response: HttpResponse[String] = Http(mds + "/postInstance").postData(
+      s"""{"principal": "$myip:2000", "otherValues":["$fullId", "$image",
+        "$myip:$lport-$rport", "$myip:2000"]}"""
+    ).header("Content-Type", "application/json").header("Charset", "UTF-8").asString
+    logInfo(s"attest result: $response")
+    // Yan: No need to check configuration if even the worker is not a good thing.
+  }
+
+  private def removeAttestation() {
+    val response: HttpResponse[String] = Http(mds + "/lazyDeleteInstance").postData(
+      s"""{"principal": "$myip:2000", "otherValues":["$fullId"]}"""
+    ).header("Content-Type", "application/json").header("Charset", "UTF-8").asString
+    logInfo(s"remove attest: $response")
   }
 
   /**
@@ -144,8 +169,12 @@ private[deploy] class ExecutorRunner(
       // Launch the process
       val builder = CommandUtils.buildProcessBuilder(appDesc.command, new SecurityManager(conf),
         memory, sparkHome.getAbsolutePath, substituteVariables)
+      logInfo(s"App Desc Command: " + appDesc.command)
       val command = builder.command()
       val formattedCommand = command.asScala.mkString("\"", "\" \"", "\"")
+      // Yan: FIXME: should have a port management facility here to dynamically assign ports.
+      // For standalone mode, if we leave spark.executor.cores untouched, it will only have
+      // one executor per host. This is good for us. We can take a fixed range for each app.
       logInfo(s"Launch command: $formattedCommand")
 
       builder.directory(executorDir)
@@ -179,6 +208,7 @@ private[deploy] class ExecutorRunner(
       // Wait for it to exit; executor may exit with code 0 (when driver instructs it to shutdown)
       // or with nonzero exit code
       val exitCode = process.waitFor()
+      // Yan: remove attestation
       state = ExecutorState.EXITED
       val message = "Command exited with code " + exitCode
       worker.send(ExecutorStateChanged(appId, execId, state, Some(message), Some(exitCode)))
@@ -191,6 +221,8 @@ private[deploy] class ExecutorRunner(
         logError("Error running executor", e)
         state = ExecutorState.FAILED
         killProcess(Some(e.toString))
+    } finally {
+      removeAttestation()
     }
   }
 }
