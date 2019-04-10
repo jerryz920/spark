@@ -153,7 +153,8 @@ export MAVEN_OPTS="${MAVEN_OPTS:--Xmx2g -XX:ReservedCodeCacheSize=512m}"
 # See: http://mywiki.wooledge.org/BashFAQ/050
 #BUILD_COMMAND=("$MVN" -T 1C clean package -DskipTests $@)
 #BUILD_COMMAND=("$MVN" -T 1C package -DskipTests $@)
-build/sbt -DskipTests clean package $@
+#build/sbt -DskipTests clean package $@
+build/sbt -Pkubernetes  -Phadoop-2.7  -Dscala-2.11  clean package $@
 
 
 # Actually build the jar
