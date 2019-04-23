@@ -45,7 +45,9 @@ private[spark] class DriverConfigOrchestrator(
     appName: String,
     mainClass: String,
     appArgs: Array[String],
-    sparkConf: SparkConf) {
+    sparkConf: SparkConf,
+    mdsAddr: String
+    ) {
 
   // The resource name prefix is derived from the Spark application name, making it easy to connect
   // the names of the Kubernetes resources from e.g. kubectl or the Kubernetes dashboard to the
@@ -87,7 +89,9 @@ private[spark] class DriverConfigOrchestrator(
       appName,
       mainClass,
       appArgs,
-      sparkConf)
+      sparkConf,
+      mdsAddr
+      )
 
     val serviceBootstrapStep = new DriverServiceBootstrapStep(
       kubernetesResourceNamePrefix,

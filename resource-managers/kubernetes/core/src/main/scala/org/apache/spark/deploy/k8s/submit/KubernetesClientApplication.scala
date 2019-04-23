@@ -44,6 +44,7 @@ import org.apache.spark.util.Utils
 private[spark] case class ClientArguments(
      mainAppResource: Option[MainAppResource],
      mainClass: String,
+     mdsAddr: String,
      driverArgs: Array[String])
 
 private[spark] object ClientArguments {
@@ -52,6 +53,7 @@ private[spark] object ClientArguments {
     var mainAppResource: Option[MainAppResource] = None
     var mainClass: Option[String] = None
     val driverArgs = mutable.ArrayBuffer.empty[String]
+    var mdsAddr: String = ""
 
     args.sliding(2, 2).toList.foreach {
       case Array("--primary-java-resource", primaryJavaResource: String) =>
@@ -60,6 +62,8 @@ private[spark] object ClientArguments {
         mainClass = Some(clazz)
       case Array("--arg", arg: String) =>
         driverArgs += arg
+      case Array("--mds", mds: String) =>
+        mdsAddr = mds
       case other =>
         val invalid = other.mkString(" ")
         throw new RuntimeException(s"Unknown arguments: $invalid")
@@ -70,6 +74,7 @@ private[spark] object ClientArguments {
     ClientArguments(
       mainAppResource,
       mainClass.get,
+      mdsAddr,
       driverArgs.toArray)
   }
 }
@@ -208,6 +213,7 @@ private[spark] class KubernetesClientApplication extends SparkApplication {
     val loggingInterval = if (waitForAppCompletion) Some(sparkConf.get(REPORT_INTERVAL)) else None
 
     val watcher = new LoggingPodStatusWatcherImpl(kubernetesAppId, loggingInterval)
+    sparkConf.set("MDS_ADDR", clientArguments.mdsAddr)
 
     val orchestrator = new DriverConfigOrchestrator(
       kubernetesAppId,
@@ -216,7 +222,8 @@ private[spark] class KubernetesClientApplication extends SparkApplication {
       appName,
       clientArguments.mainClass,
       clientArguments.driverArgs,
-      sparkConf)
+      sparkConf,
+      clientArguments.mdsAddr)
 
     Utils.tryWithResource(SparkKubernetesClientFactory.createKubernetesClient(
       master,

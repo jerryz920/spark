@@ -44,6 +44,7 @@ COPY conf /opt/spark/conf
 COPY ${img_path}/spark/entrypoint.sh /opt/
 COPY examples /opt/spark/examples
 COPY data /opt/spark/data
+RUN apk add curl
 
 ENV SPARK_HOME /opt/spark
 

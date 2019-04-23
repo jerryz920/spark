@@ -17,9 +17,13 @@
 package org.apache.spark.deploy.k8s
 
 import java.io.File
+import java.nio.file.{Files, Paths}
+import java.security.{DigestInputStream, MessageDigest}
 import java.util.concurrent.TimeUnit
 
 import scala.concurrent.{ExecutionContext, Future}
+
+import scalaj.http._
 
 import org.apache.spark.{SecurityManager => SparkSecurityManager, SparkConf}
 import org.apache.spark.deploy.SparkHadoopUtil
@@ -45,11 +49,34 @@ private[spark] class SparkPodInitContainer(
 
   private val jarsDownloadDir = new File(sparkConf.get(JARS_DOWNLOAD_LOCATION))
   private val filesDownloadDir = new File(sparkConf.get(FILES_DOWNLOAD_LOCATION))
+  private val mdsAddr = sparkConf.get("MDS_ADDR", "mds.latte.org")
 
   private val remoteJars = sparkConf.get(INIT_CONTAINER_REMOTE_JARS)
   private val remoteFiles = sparkConf.get(INIT_CONTAINER_REMOTE_FILES)
 
   private val downloadTimeoutMinutes = sparkConf.get(INIT_CONTAINER_MOUNT_TIMEOUT)
+
+  def sha256(fullname: String): String = {
+    val md = MessageDigest.getInstance("SHA-256")
+    val path = Paths.get(fullname)
+    val dis = new DigestInputStream(Files.newInputStream(path), md)
+    while (dis.available > 0) {
+      dis.read
+    }
+    dis.close
+    md.digest.map(b => String.format("%02x", Byte.box(b))).mkString
+  }
+
+  def attestJar(url: String, dir: String) {
+    val fname = url.split("/").last
+    val path = dir + "/" + fname
+    val sum = sha256(path)
+    val response: HttpResponse[String] = Http(
+      "http://" + mdsAddr + ":19851/postSelfConfig").postData(
+      s"""{"principal": "", "otherValues: ["spark.jar", ${sum}, "spark.jar.name", ${fname}]}"""
+      ).header("Content-Type", "application/json").header("Charset", "UTF-8").asString
+    logInfo(s"attest jar result: $response")
+  }
 
   def run(): Unit = {
     logInfo(s"Downloading remote jars: $remoteJars")

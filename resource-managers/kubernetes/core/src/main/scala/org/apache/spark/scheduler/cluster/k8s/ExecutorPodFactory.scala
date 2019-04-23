@@ -72,6 +72,8 @@ private[spark] class ExecutorPodFactory(
       sparkConf,
       KUBERNETES_NODE_SELECTOR_PREFIX)
 
+  private val mdsAddr = sparkConf.get("MDS_ADDR", "")
+
   private val executorContainerImage = sparkConf
     .get(EXECUTOR_CONTAINER_IMAGE)
     .getOrElse(throw new SparkException("Must specify the executor container image"))
@@ -180,6 +182,10 @@ private[spark] class ExecutorPodFactory(
         .addToRequests("cpu", executorCpuQuantity)
         .endResources()
       .addAllToEnv(executorEnv.asJava)
+      .addNewEnv()
+        .withName("MDS_ADDR")
+        .withValue(mdsAddr)
+        .endEnv()
       .withPorts(requiredPorts.asJava)
       .addToArgs("executor")
       .build()

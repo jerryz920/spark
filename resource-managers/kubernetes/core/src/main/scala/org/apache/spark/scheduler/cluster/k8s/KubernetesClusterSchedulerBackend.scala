@@ -17,7 +17,7 @@
 package org.apache.spark.scheduler.cluster.k8s
 
 import java.io.Closeable
-import java.net.InetAddress
+import java.net._
 import java.util.concurrent.{ConcurrentHashMap, ExecutorService, ScheduledExecutorService, TimeUnit}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 import javax.annotation.concurrent.GuardedBy
@@ -28,6 +28,7 @@ import io.fabric8.kubernetes.client.Watcher.Action
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
+import scalaj.http._
 
 import org.apache.spark.SparkException
 import org.apache.spark.deploy.k8s.Config._
@@ -68,6 +69,8 @@ private[spark] class KubernetesClusterSchedulerBackend(
     .inNamespace(kubernetesNamespace)
     .withName(kubernetesDriverPodName)
     .get()
+
+  private val mdsAddr = conf.get("MDS_ADDR", "mds.latte.org")
 
   protected override val minRegisteredRatio =
     if (conf.getOption("spark.scheduler.minRegisteredResourcesRatio").isEmpty) {
@@ -311,6 +314,14 @@ private[spark] class KubernetesClusterSchedulerBackend(
 
     private val DEFAULT_CONTAINER_FAILURE_EXIT_STATUS = -1
 
+    def postMember(podIP: String) {
+          val response: HttpResponse[String] = Http(
+            "http://" + mdsAddr + ":19851/postMembership").postData(
+            s"""{"principal": "", "otherValues":["SafeSparkGroup", "${podIP}"]}"""
+          ).header("Content-Type", "application/json").header("Charset", "UTF-8").asString
+          logInfo(s"membership result: $response")
+    }
+
     override def eventReceived(action: Action, pod: Pod): Unit = {
       val podName = pod.getMetadata.getName
       val podIP = pod.getStatus.getPodIP
@@ -320,6 +331,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
             && pod.getMetadata.getDeletionTimestamp == null) =>
           val clusterNodeName = pod.getSpec.getNodeName
           logInfo(s"Executor pod $podName ready, launched at $clusterNodeName as IP $podIP.")
+          postMember(podIP)
           executorPodsByIPs.put(podIP, pod)
 
         case Action.DELETED | Action.ERROR =>

@@ -38,7 +38,9 @@ private[spark] class BasicDriverConfigurationStep(
     appName: String,
     mainClass: String,
     appArgs: Array[String],
-    sparkConf: SparkConf) extends DriverConfigurationStep {
+    sparkConf: SparkConf,
+    mdsAddr: String
+    ) extends DriverConfigurationStep {
 
   private val driverPodName = sparkConf
     .get(KUBERNETES_DRIVER_POD_NAME)
@@ -85,6 +87,7 @@ private[spark] class BasicDriverConfigurationStep(
           .build()
       }
 
+
     val driverAnnotations = driverCustomAnnotations ++ Map(SPARK_APP_NAME_ANNOTATION -> appName)
 
     val nodeSelector = KubernetesUtils.parsePrefixedKeyValuePairs(
@@ -109,6 +112,10 @@ private[spark] class BasicDriverConfigurationStep(
       .withImagePullPolicy(imagePullPolicy)
       .addAllToEnv(driverCustomEnvs.asJava)
       .addToEnv(driverExtraClasspathEnv.toSeq: _*)
+      .addNewEnv()
+        .withName("MDS_ADDR")
+        .withValue(mdsAddr)
+        .endEnv()
       .addNewEnv()
         .withName(ENV_DRIVER_MEMORY)
         .withValue(driverMemoryString)

@@ -23,6 +23,7 @@ addSbtPlugin("io.spray" % "sbt-revolver" % "0.9.1")
 libraryDependencies += "org.ow2.asm"  % "asm" % "5.1"
 
 libraryDependencies += "org.ow2.asm"  % "asm-commons" % "5.1"
+libraryDependencies +=  "org.scalaj" %% "scalaj-http" % "2.3.0"
 
 // sbt 1.0.0 support: https://github.com/ihji/sbt-antlr4/issues/14
 addSbtPlugin("com.simplytyped" % "sbt-antlr4" % "0.7.11")
@@ -35,3 +36,4 @@ addSbtPlugin("com.simplytyped" % "sbt-antlr4" % "0.7.11")
 // the plugin; this is tracked at SPARK-14401.
 
 addSbtPlugin("org.spark-project" % "sbt-pom-reader" % "1.0.0-spark")
+
