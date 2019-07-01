@@ -1,4 +1,4 @@
-for n in `seq 1 6`; do
+for n in `seq 1 8`; do
   (eval $(docker-machine env worker-$n)
   bin/docker-image-tool.sh -t v2.3 build >build-log-$n 2>&1)&
 done
