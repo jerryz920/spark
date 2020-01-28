@@ -8,3 +8,5 @@ done
   for n in `jobs -p`; do
     wait $n
   done
+  # run dev/make-distribution.sh --tgz --name safe-spark -Phadoop-2.7
+
