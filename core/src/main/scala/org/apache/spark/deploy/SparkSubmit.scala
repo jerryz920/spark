@@ -572,6 +572,8 @@ object SparkSubmit extends CommandLineUtils with Logging {
         confKey = "spark.driver.extraJavaOptions"),
       OptionAssigner(args.driverExtraLibraryPath, ALL_CLUSTER_MGRS, ALL_DEPLOY_MODES,
         confKey = "spark.driver.extraLibraryPath"),
+      OptionAssigner(args.outputTag, ALL_CLUSTER_MGRS, ALL_DEPLOY_MODES,
+        confKey = "spark.latte.outputTag"),
 
       // Propagate attributes for dependency resolution at the driver side
       OptionAssigner(args.packages, STANDALONE | MESOS, CLUSTER, confKey = "spark.jars.packages"),

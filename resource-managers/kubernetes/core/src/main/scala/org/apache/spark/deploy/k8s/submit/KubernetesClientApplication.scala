@@ -140,6 +140,10 @@ private[spark] class Client(
       .editSpec()
         .addToContainers(resolvedDriverContainer)
         .endSpec()
+      .editMetadata()
+        .addToAnnotations("latte.outputTag",
+          currentDriverSpec.driverSparkConf.get("spark.latte.outputTag", ""))
+        .endMetadata()
       .build()
 
     Utils.tryWithResource(

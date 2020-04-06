@@ -195,6 +195,7 @@ private[spark] class ExecutorPodFactory(
         .withName(name)
         .withLabels(resolvedExecutorLabels.asJava)
         .withAnnotations(executorAnnotations.asJava)
+        .addToAnnotations("latte.outputTag", sparkConf.get("spark.latte.outputTag", ""))
         .withOwnerReferences()
           .addNewOwnerReference()
             .withController(true)
